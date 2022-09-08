@@ -1,0 +1,20 @@
+pipeline {
+    environment {
+        DT_TAG = sh(script: 'date -u +"%Y%m%d_%H%M%S"', , returnStdout: true).trim()
+        WS_PWD = sh(script: 'pwd', , returnStdout: true).trim()
+        //WS_VAR = sh(script: 'sh ${pwd}/al8_get_lib_refs', , returnStdout: true).trim()
+    } 
+    agent any
+
+    stages {
+        stage('Prep') {
+            steps {
+                echo 'Preparing for dev'
+                echo 'DT_TAG: $DT_TAG'
+                echo 'WS_PWD: $WS_PWD'
+                //echo 'WS_VAR: $WS_VAR'
+                sh('ls  -al')
+            }
+        }
+    }
+}
