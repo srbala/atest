@@ -1,6 +1,5 @@
 properties([parameters([[$class: 'ChoiceParameter', choiceType: 'PT_SINGLE_SELECT', filterLength: 1, filterable: true, name: 'al8repo', randomName: 'choice-parameter-10001463150357', script: [$class: 'GroovyScript', fallbackScript: [classpath: [], sandbox: false, script: ''], script: [classpath: [], sandbox: false, script: '''import groovy.json.JsonSlurper
 
-
 def getGitHubDevBranches(String prodPreFix="al8-20220901", String devRepo="almalinuxautobot/docker-images"){
   def regions = "curl -s https://api.github.com/repos/${devRepo}/branches"
   def region = regions.execute() 
@@ -60,16 +59,6 @@ def getGitHubProdBranch(String osVer="al8", String prodRepoWithBranch="docker-li
 
 def getBranchesAlma8() {
   def a1 = getGitHubProdBranch()  // parameter al8 is default, defaults to standard repos
-  def a2 = getGitHubDevBranches(a1)
-
-  def a3 = []
-  a3.add(a1)
-  a3.addAll(a2)
-
-  return a3
-}
-def getBranchesAlma9() {
-  def a1 = getGitHubProdBranch("al9")  // defaults to standard repos
   def a2 = getGitHubDevBranches(a1)
 
   def a3 = []
@@ -84,7 +73,6 @@ def result = getBranchesAlma8()
 return result
 ''']]], [$class: 'ChoiceParameter', choiceType: 'PT_SINGLE_SELECT', filterLength: 1, filterable: true, name: 'al9repo', randomName: 'choice-parameter-10001463150357', script: [$class: 'GroovyScript', fallbackScript: [classpath: [], sandbox: false, script: ''], script: [classpath: [], sandbox: false, script: '''import groovy.json.JsonSlurper
 
-
 def getGitHubDevBranches(String prodPreFix="al8-20220901", String devRepo="almalinuxautobot/docker-images"){
   def regions = "curl -s https://api.github.com/repos/${devRepo}/branches"
   def region = regions.execute() 
@@ -142,16 +130,6 @@ def getGitHubProdBranch(String osVer="al8", String prodRepoWithBranch="docker-li
   return branch
 }
 
-def getBranchesAlma8() {
-  def a1 = getGitHubProdBranch()  // parameter al8 is default, defaults to standard repos
-  def a2 = getGitHubDevBranches(a1)
-
-  def a3 = []
-  a3.add(a1)
-  a3.addAll(a2)
-
-  return a3
-}
 def getBranchesAlma9() {
   def a1 = getGitHubProdBranch("al9")  // defaults to standard repos
   def a2 = getGitHubDevBranches(a1)
@@ -169,42 +147,15 @@ return result
 ''']]], choice(choices: ['true', 'false'], name: 'run_tests')])])
 
 pipeline {
-    environment {
-        DT_TAG = sh(script: 'date -u +"%Y%m%d_%H%M%S"', , returnStdout: true).trim()
-        WS_PWD = sh(script: 'pwd', , returnStdout: true).trim()
-        WS_AL8 = sh(script: './al8_get_lib_refs', , returnStdout: true).trim()                            //can be used in this stage only
-        WS_AL9 = sh(script: './al9_get_lib_refs', , returnStdout: true).trim()  
-    } 
-    agent any
+  agent any
 
-    stages {
-        stage('Prepare JQ & GH') {
-            steps {
-                sh '''
-                mkdir -p $PWD/bin
-                PATH=$PWD/bin:$PATH
-                curl -s -o $PWD/cli.json https://api.github.com/repos/cli/cli/releases/latest
-                J1=$(cat $PWD/cli.json | jq '.assets[] .browser_download_url' | grep linux_amd64.tar.gz | xargs)
-                curl -s -o $PWD/cli.tar.gz -L $J1
-                tar -xf $PWD/cli.tar.gz
-                mv $PWD/gh_*/bin/gh $PWD/bin/gh
-                chmod +x $PWD/bin/gh
-                rm -rf gh_* $PWD/cli.*
-                jq --version && gh --version
-                '''
-                echo 'Preparing for dev'
-                // sh('ls  -al')
-                script {
-                    echo "DT_TAG: ${env.DT_TAG}"
-                    echo "WS_PWD: ${env.WS_PWD}"
-                    echo "WS_AL8: ${env.WS_AL8}"
-                    echo "WS_AL9: ${env.WS_AL9}"
-                    echo "Al8 Repo: ${params.al8repo}"
-                    echo "Al9 Repo: ${params.al9repo}"
-                    echo "Run Tests: ${params.run_tests}"
-                }
-                // sh('PATH=$PWD/bin:$PATH && ./al8_get_lib_refs && ./al9_get_lib_refs')
-            }
-        }
+  stages {
+    stage('testing') {
+      steps {
+        println "Al8 Repo: ${params.al8repo}"
+        println "Al9 Repo: ${params.al9repo}"
+        println "Run Test: ${run_tests}"
+      }  
     }
+  }
 }

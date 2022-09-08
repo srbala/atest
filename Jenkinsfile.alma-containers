@@ -1,0 +1,64 @@
+pipeline {
+  agent {
+    label 'ec2-al8-x86_64'
+  }
+  options {
+    // Required for manual clean before build
+    skipDefaultCheckout(true)
+  }
+  parameters {
+    string(name: 'INPUT_TAG', defaultValue: 'almalinux:8', description: 'Container Image Input')
+    string(name: 'JOB_TAG', defaultValue: 'al8', description: 'Job Tag, use al8 or al9')
+    string(name: 'GIT_REPO', defaultValue: 'https://github.com/srbala/atest.git', description: 'Repo for container source and scripts')
+  }   
+  environment {
+    ENV_JOB_TAG = "${params.JOB_TAG}"
+    ENV_INPUT_TAG = "${params.INPUT_TAG}"
+    ENV_GIT_REPO = "${params.GIT_REPO}"
+    DT_TAG = sh(script: 'date -u +"%Y%m%d-%H%M%S"', , returnStdout: true).trim()
+    WS_PWD = sh(script: 'pwd', , returnStdout: true).trim()
+    WS_DIR = "dock_${params.JOB_TAG}"
+  }
+  stages {
+      stage('Prepare-Workspace') {
+          steps {
+            sh('echo "Cleaning workspace ..."')
+            // Clean before build
+            cleanWs()
+            sh '''BIN_DIR="${PWD}/bin"
+              mkdir -p ${BIN_DIR}
+              curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b $BIN_DIR
+              PATH=${BIN_DIR}:$PATH
+              grype db update && grype version
+              '''
+          }
+      }
+      stage('Git-Checkout-Repo') {
+          steps {
+            sh('git clone --single-branch --branch=main ${ENV_GIT_REPO} ${WS_DIR}')
+          }
+      }
+      stage('Scan-Almalinux-tag') {
+          steps {
+            sh('PATH=${PWD}/bin:$PATH && cd ${WS_DIR} && date && ./sec_scan ${ENV_INPUT_TAG} ${ENV_JOB_TAG} true && date ')
+          }
+      }       
+  }
+  post {
+      always {
+          archiveArtifacts artifacts: "**/al*.log", fingerprint: true
+      }
+      success {
+          slackSend channel: '#albs-jenkins-notifications',
+              color: 'good',
+              message: "@here The Docker/Container job ${currentBuild.fullDisplayName} - ${env.JOB_NAME}, ID #${env.BUILD_NUMBER} completed successfully ${currentBuild.absoluteUrl}."
+      }
+      failure {
+          slackSend channel: '#albs-jenkins-notifications-dev-qa',   // albs-jenkins-action-required 
+              message: "@channel The Docker/Container job ${currentBuild.fullDisplayName} - ${env.JOB_NAME}, ID #${env.BUILD_NUMBER} has failed, possible security update found ${currentBuild.absoluteUrl}.",
+              color: 'red'
+          // needs reorg for build step
+          // build(job: 'Almalinux8')
+      }
+  }
+}
