@@ -1,0 +1,101 @@
+pipeline {
+    agent {
+        label 'ec2-al8-x86_64'
+    }  
+  options {
+    // Required for manual clean before build
+    skipDefaultCheckout(true)
+  }
+  parameters {
+    string(name: 'INPUT_TAG', defaultValue: 'almalinux:8', description: 'Container Image Input')
+    string(name: 'JOB_TAG', defaultValue: 'al8', description: 'Job Tag, use al8 or al9')
+    string(name: 'GIT_REPO', defaultValue: 'https://github.com/srbala/atest.git', description: 'Repo for container source and scripts')
+  }   
+  environment {
+    ENV_JOB_TAG = "${params.JOB_TAG}"
+    ENV_INPUT_TAG = "${params.INPUT_TAG}"
+    ENV_GIT_REPO = "${params.GIT_REPO}"
+    DT_TAG = sh(script: 'date -u +"%Y%m%d-%H%M%S"', , returnStdout: true).trim()
+    WS_PWD = sh(script: 'pwd', , returnStdout: true).trim()
+    WS_DIR = "dock_${params.JOB_TAG}"
+  }    
+    stages {
+       stage('Prepare-Workspace') {
+            steps {
+              sh('echo "Building Almalinux 8 RootFS - Start" & date ')
+              sh('echo "Cleaning workspace ..." && sudo rm -rf *')
+            }
+        }
+        stage('Git-Checkout-Repo') {
+            steps {
+              sh('git clone --depth=1 --branch=main https://github.com/srbala/alma-docker-images.git ${WS_DIR}')
+            }
+        }
+        stage('Build-RootFS-Files') {
+            steps {
+              sh('cd ${WS_DIR} && date && ./al8_gen_env && cat $PWD/env.al8 && ./al8_build_rootfs && date ')
+            }
+        }        
+         stage('Git-Checkout-Templates') {
+            steps {
+              sh('git clone --depth=1 --branch=al8-template https://github.com/almalinux/docker-images.git results')
+            }
+        }
+        stage('Git-Prepare-Files') {
+            steps {
+              sh('mv ${WS_DIR}/work/*.xz results/ && cp ${WS_DIR}/env.al8 results/ && ls -al results/ && cd results && source $PWD/env.al8  && git checkout --orphan ${al_git_publish_branch_8} && git add * && git status')
+            }
+        }
+        stage('Git-Commit-and-Push') {
+            steps {
+                withCredentials([string(credentialsId: 'github-almalinuxautobot-name', variable: 'GIT_NAME'),string(credentialsId: 'github-almalinuxautobot-email', variable: 'GIT_EMAIL')]) {
+                    sh '''
+                      cd results
+                      source $PWD/env.al8 
+                      set +x
+                      git config user.name ${GIT_NAME}
+                      git config user.email ${GIT_EMAIL}
+                      git commit -m "Almalinux 8 RootFS Build - ${al_git_publish_branch}"
+                    '''
+                }
+                withCredentials([usernamePassword(credentialsId: 'github-almalinuxautobot', passwordVariable: 'GIT_PWD', usernameVariable: 'GIT_UID')]) {
+                    sh('cd results && source $PWD/env.al8 && git push https://${GIT_UID}:${GIT_PWD}@github.com/almalinuxautobot/docker-images.git ${al_git_publish_branch}')
+                }
+                sh('rm -rf results && echo "Building Almalinux 8 RootFS - End"  & date ')
+            }
+        }
+        stage('Run-Tests') {
+            steps {
+                sh('cd ${WS_DIR} && pwd && ls -al && ./al8_run_tests && cat al8_junit.xml')
+            }
+        }
+        stage('Publish-Resuts') {
+            steps {
+                junit allowEmptyResults: true, skipPublishingChecks: true, testResults: '${WS_DIR}/al8_junit.xml'
+            }
+        }
+        stage('Scan-Al-8.6') {
+            steps {
+              sh('BIN_DIR="${PWD}/bin" && PATH=${BIN_DIR}:$PATH &&  mkdir -p ${BIN_DIR} && curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b $BIN_DIR &&  grype db update && grype version')  
+              sh('PATH=${PWD}/bin:$PATH && cd ${WS_DIR} && source $PWD/env.al8 && date && ./sec_scan $SYS_DEFAULT al86 && date ')
+            }
+        }       
+    }
+    post {
+        always {
+            archiveArtifacts artifacts: "**/al*.xml", fingerprint: true   
+            archiveArtifacts artifacts: "**/al*.log", fingerprint: true
+            archiveArtifacts artifacts: "**/env.*", fingerprint: true
+        }        
+        success {
+            slackSend channel: '#albs-jenkins-notifications',
+                color: 'good',
+                message: "@here The Docker/Container rootfs build job ${currentBuild.fullDisplayName} - ${env.JOB_NAME}, ID #${env.BUILD_NUMBER} completed successfully ${currentBuild.absoluteUrl}."
+        }
+        failure {
+            slackSend channel: '#albs-jenkins-action-required',
+                message: "@channel The Docker/Container rootfs build job ${currentBuild.fullDisplayName} - ${env.JOB_NAME}, ID #${env.BUILD_NUMBER} has failed, possible security update found ${currentBuild.absoluteUrl}.",
+                color: 'red'
+        }
+    }
+}

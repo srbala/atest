@@ -640,7 +640,7 @@ function almaEnvBuilder() {
     if  [[ "${run_date}" != "today" ]]; then
         date_suffix="${run_date}"
     fi
-    branch="al-${os}.${rel}-$(date +'%Y%m%d-%H%M%S')"
+    branch="al${os}-$(date +'%Y%m%d-%H%M%S')"
     repo_prefix="docker.io/srbala quay.io/almalinuxautobot"
     repo="quay.io/almalinuxautobot"
     if [ "${run_env}" == "prod" ]; then

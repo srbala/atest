@@ -1,3 +1,4 @@
+def scanStatus = '0'
 pipeline {
   agent {
     label 'ec2-al8-x86_64'
@@ -20,45 +21,89 @@ pipeline {
     WS_DIR = "dock_${params.JOB_TAG}"
   }
   stages {
-      stage('Prepare-Workspace') {
-          steps {
-            sh('echo "Cleaning workspace ..."')
-            // Clean before build
-            cleanWs()
-            sh '''BIN_DIR="${PWD}/bin"
-              mkdir -p ${BIN_DIR}
-              curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b $BIN_DIR
-              PATH=${BIN_DIR}:$PATH
-              grype db update && grype version
-              '''
-          }
+    stage('Prepare-Workspace') {
+        steps {
+          sh('echo "Cleaning workspace ..."')
+          // Clean before build
+          cleanWs()
+          sh '''BIN_DIR="${PWD}/bin"
+            mkdir -p ${BIN_DIR}
+            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b $BIN_DIR
+            PATH=${BIN_DIR}:$PATH
+            grype db update && grype version
+            '''
+          sh('git clone --single-branch --branch=main ${ENV_GIT_REPO} ${WS_DIR}')
+        }
+    }
+    stage('Pre Sec Scan') {
+      options {
+        timeout(time: 2, unit: "HOURS")
       }
-      stage('Git-Checkout-Repo') {
-          steps {
-            sh('git clone --single-branch --branch=main ${ENV_GIT_REPO} ${WS_DIR}')
+      steps {
+        script {
+          Exception hasException = null
+
+          catchError(buildResult: 'SUCCESS', stageResult: 'ABORTED') { 
+            try { 
+              echo "Started security scanning ..."
+              // sleep(time: 5, unit: "SECONDS")
+              sh(script:'PATH=${PWD}/bin:$PATH && cd ${WS_DIR} && date && ./sec_scan ${ENV_INPUT_TAG} ${ENV_JOB_TAG} && date ')
+              scanStatus = readFile("${WS_DIR}/__sec_scan").trim()
+              if (scanStatus != '0') {
+                echo "Security scan return code: ${scanStatus}"  
+                slackSend channel: '#albs-jenkins-notifications-dev-qa', // albs-jenkins-action-required albs-jenkins-notifications-dev-qa - qa use
+                  message: "@channel The Docker/Container job ${currentBuild.fullDisplayName} - ${env.JOB_NAME}, ID #${env.BUILD_NUMBER} has failed, possible security update found ${currentBuild.absoluteUrl}.",
+                  color: 'red'  
+              } 
+            } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+              scanStatus = readFile("${WS_DIR}/__sec_scan").trim()
+              error "Caught ${e.toString()}" 
+            } catch (Throwable e) {
+              scanStatus = readFile("${WS_DIR}/__sec_scan").trim()
+              hasException = e
+            }
           }
+
+          if (hasException) {
+            echo "Security scan status: ${scanStatus}"
+            error hasException.message
+          }
+        }
       }
-      stage('Scan-Almalinux-tag') {
-          steps {
-            sh('PATH=${PWD}/bin:$PATH && cd ${WS_DIR} && date && ./sec_scan ${ENV_INPUT_TAG} ${ENV_JOB_TAG} true && date ')
-          }
-      }       
+    }  
+    stage('four') {
+      when {
+        anyOf {
+          expression { params.FORCE_BUILD_ROOTFS == true }
+          expression { scanStatus != '0' }
+        } 
+      }
+      steps {
+        echo "stage 4, scanStatus: ${scanStatus}"
+      }
+    }     
+      // stage('Scan-Almalinux-tag') {
+      //     steps {
+      //       sh('PATH=${PWD}/bin:$PATH && cd ${WS_DIR} && date && ./sec_scan ${ENV_INPUT_TAG} ${ENV_JOB_TAG} true && date ')
+      //     }
+      // }       
   }
   post {
-      always {
-          archiveArtifacts artifacts: "**/al*.log", fingerprint: true
-      }
-      success {
-          slackSend channel: '#albs-jenkins-notifications',
-              color: 'good',
-              message: "@here The Docker/Container job ${currentBuild.fullDisplayName} - ${env.JOB_NAME}, ID #${env.BUILD_NUMBER} completed successfully ${currentBuild.absoluteUrl}."
-      }
-      failure {
-          slackSend channel: '#albs-jenkins-action-required',   //  albs-jenkins-notifications-dev-qa - qa use
-              message: "@channel The Docker/Container job ${currentBuild.fullDisplayName} - ${env.JOB_NAME}, ID #${env.BUILD_NUMBER} has failed, possible security update found ${currentBuild.absoluteUrl}.",
-              color: 'red'
-          // needs reorg for build step
-          // build(job: 'Almalinux8')
-      }
+    always {
+      echo "Security scan status: ${scanStatus}"
+      archiveArtifacts artifacts: "**/al*.log", fingerprint: true
+    }
+    success {
+      slackSend channel: '#albs-jenkins-notifications-dev-qa',
+          color: 'good',
+          message: "@here The Docker/Container job ${currentBuild.fullDisplayName} - ${env.JOB_NAME}, ID #${env.BUILD_NUMBER} completed successfully ${currentBuild.absoluteUrl}."
+    }
+    failure {
+      slackSend channel: '#albs-jenkins-notifications-dev-qa', // albs-jenkins-action-required albs-jenkins-notifications-dev-qa - qa use
+          message: "@channel The Docker/Container job ${currentBuild.fullDisplayName} - ${env.JOB_NAME}, ID #${env.BUILD_NUMBER} has failed, verify ${currentBuild.absoluteUrl}.",
+          color: 'red'
+      // needs reorg for build step
+      // build(job: 'Almalinux8')
+    }
   }
 }
